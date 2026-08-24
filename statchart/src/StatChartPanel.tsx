@@ -20,14 +20,16 @@ import {
   applyValueMapping,
   createRegexFromString,
 } from '@perses-dev/components';
+import { Labels, TimeSeriesData } from '@perses-dev/core';
 import { Stack, Typography, SxProps } from '@mui/material';
 import { FC, useMemo } from 'react';
 import { PanelProps, PanelData } from '@perses-dev/plugin-system';
-import { Labels, TimeSeriesData } from '@perses-dev/spec';
 import { StatChartOptions } from './stat-chart-model';
 import { convertSparkline } from './utils/data-transform';
 import { calculateValue } from './utils/calculate-value';
 import { getStatChartColor } from './utils/get-color';
+import { formatStatChartValue } from './utils/format-stat-chart-value';
+import { measureTextWidth } from './utils/calculate-font-size';
 import { StatChartBase, StatChartData } from './StatChartBase';
 
 const MIN_WIDTH = 100;
@@ -44,16 +46,67 @@ export const StatChartPanel: FC<StatChartPanelProps> = (props) => {
 
   const isMultiSeries = statChartData.length > 1;
 
+  // Find the widest value text (by pixel width) to use as alignment reference
+  const alignmentText = useMemo(() => {
+    if (!isMultiSeries) return undefined;
+    const fontFamily = chartsTheme.echartsTheme.textStyle?.fontFamily ?? 'Lato';
+    const fontSize = Number(chartsTheme.echartsTheme.textStyle?.fontSize) ?? 12;
+    let widest = '';
+    let maxWidth = 0;
+    for (const series of statChartData) {
+      const formatted = formatStatChartValue(series.calculatedValue, format);
+      const width = measureTextWidth(formatted, 700, fontSize, fontFamily);
+      if (width > maxWidth) {
+        maxWidth = width;
+        widest = formatted;
+      }
+    }
+    return widest;
+  }, [statChartData, format, isMultiSeries, chartsTheme.echartsTheme.textStyle]);
+
+  // Find the longest series name (by pixel width) to unify legend sizing
+  const alignmentSeriesName = useMemo(() => {
+    if (!isMultiSeries) return undefined;
+    const fontFamily = chartsTheme.echartsTheme.textStyle?.fontFamily ?? 'Lato';
+    const fontSize = Number(chartsTheme.echartsTheme.textStyle?.fontSize) ?? 12;
+    let widest = '';
+    let maxWidth = 0;
+    for (const series of statChartData) {
+      const name = series.seriesData?.name ?? '';
+      const width = measureTextWidth(name, 400, fontSize, fontFamily);
+      if (width > maxWidth) {
+        maxWidth = width;
+        widest = name;
+      }
+    }
+    return widest;
+  }, [statChartData, isMultiSeries, chartsTheme.echartsTheme.textStyle]);
+
   // Handle three-state showLegend: 'on' | 'off' | 'auto' (or undefined for backward compatibility)
   const shouldShowLegend = spec.legendMode === 'on' ? true : spec.legendMode === 'off' ? false : isMultiSeries;
 
   if (!contentDimensions) return null;
 
-  // Calculates chart width
+  // Calculates chart width — ensure cells are wide enough to show full series names
   const spacing = SPACING * (statChartData.length - 1);
   let chartWidth = (contentDimensions.width - spacing) / statChartData.length;
-  if (isMultiSeries && chartWidth < MIN_WIDTH) {
-    chartWidth = MIN_WIDTH;
+  if (isMultiSeries) {
+    const fontFamily = chartsTheme.echartsTheme.textStyle?.fontFamily ?? 'Lato';
+    const seriesNameFontSize = Math.max(14, Math.min((contentDimensions.height * 0.15) / 1.2, 30));
+    const padding = chartsTheme.container.padding.default;
+    let maxTextWidth = MIN_WIDTH;
+    for (const series of statChartData) {
+      const nameWidth = measureTextWidth(series.seriesData?.name ?? '', 400, seriesNameFontSize, fontFamily);
+      const valWidth = measureTextWidth(
+        formatStatChartValue(series.calculatedValue, format),
+        700,
+        seriesNameFontSize * 1.5,
+        fontFamily
+      );
+      const needed = Math.max(nameWidth, valWidth) + padding * 2;
+      if (needed > maxTextWidth) maxTextWidth = needed;
+    }
+    chartWidth = Math.max(chartWidth, maxTextWidth);
   }
 
   const noDataTextStyle = (chartsTheme.noDataOption.title as TitleComponentOption).textStyle;
@@ -67,7 +120,25 @@ export const StatChartPanel: FC<StatChartPanelProps> = (props) => {
       justifyContent={isMultiSeries ? 'left' : 'center'}
       alignItems="center"
       sx={{
-        overflowX: isMultiSeries ? 'scroll' : 'auto',
+        overflowX: isMultiSeries ? 'auto' : 'hidden',
+        '&::-webkit-scrollbar': {
+          height: '4px',
+        },
+        '&::-webkit-scrollbar-track': {
+          background: 'transparent',
+        },
+        '&::-webkit-scrollbar-thumb': {
+          background: 'transparent',
+          borderRadius: '2px',
+        },
+        '&:hover::-webkit-scrollbar-thumb': {
+          background: 'rgba(128, 128, 128, 0.4)',
+        },
+        scrollbarWidth: 'thin',
+        scrollbarColor: 'transparent transparent',
+        '&:hover': {
+          scrollbarColor: 'rgba(128, 128, 128, 0.4) transparent',
+        },
       }}
     >
       {statChartData.length ? (
@@ -85,6 +156,8 @@ export const StatChartPanel: FC<StatChartPanelProps> = (props) => {
               showSeriesName={shouldShowLegend}
               valueFontSize={valueFontSize}
               colorMode={colorMode}
+              alignmentText={alignmentText}
+              alignmentSeriesName={alignmentSeriesName}
             />
           );
         })
